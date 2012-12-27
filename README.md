@@ -3,8 +3,7 @@ fsbext
 
 FSB files extractor (extracts from FMOD sound fx archives) 
 
-## NOTE: Please check [the official homepage](http://aluigi.altervista.org/search.php?src=fsbext) 
-for updates.
+## NOTE: Please check [the official homepage](http://aluigi.altervista.org/search.php?src=fsbext) for updates.
 
 The code here comes from <http://aluigi.altervista.org/search.php?src=fsbext> and is the 
 excellent work of <aluigi@autistici.org>

@@ -1,0 +1,19 @@
+NAME=fsbext
+SRCFILES=src/fsbext.c
+
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+bindir=@bindir@
+
+CFLAGS=-Isrc -Wno-format @configure_flags@ 
+
+all:	$(NAME)
+clean:
+	rm -f $(NAME)
+	rm -f $(OBJECTS)
+
+install: $(NAME)
+	cp $(NAME) $(bindir)
+
+$(NAME): $(OBJECTS)
+	gcc ${CFLAGS} -o $(NAME) $(SRCFILES)

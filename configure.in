@@ -1,0 +1,31 @@
+#                                               -*- Autoconf -*-
+# Process this file with autoconf to produce a configure script.
+
+AC_PREREQ([2.69])
+AC_INIT([FULL-PACKAGE-NAME], [VERSION], [BUG-REPORT-ADDRESS])
+AC_CONFIG_SRCDIR([src/fsb.h])
+
+# Checks for programs.
+AC_PROG_CC
+
+# Checks for libraries.
+
+# Checks for header files.
+AC_CHECK_HEADERS([stdint.h stdlib.h string.h unistd.h])
+
+# Checks for typedefs, structures, and compiler characteristics.
+
+# Checks for libraryfunctions.
+AC_CHECK_FUNCS([stricmp strcasecmp])
+
+AC_DEFINE(configure_flags)
+if test "$ac_cv_func_stricmp" != yes; then
+	if test "$ac_cv_func_strcasecmp" != yes; then
+		AC_MSG_ERROR("unable to find string case comparison function")
+	fi
+	configure_flags="$configure_flags -Dstricmp=strcasecmp"
+fi
+AC_SUBST(configure_flags)
+
+AC_CONFIG_FILES([Makefile])
+AC_OUTPUT

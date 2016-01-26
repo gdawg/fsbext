@@ -5,7 +5,7 @@ prefix=@prefix@
 exec_prefix=@exec_prefix@
 bindir=@bindir@
 
-CFLAGS=-Isrc -Wno-format @configure_flags@ 
+CFLAGS=-Isrc -Wno-format @configure_flags@ -O
 
 all:	$(NAME)
 clean:

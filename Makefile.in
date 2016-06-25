@@ -1,5 +1,6 @@
 NAME := fsbext
 SRCFILES := @srcdir@/src/fsbext.c
+OBJECTS := $(notdir ${SRCFILES:.c=.o})
 
 prefix := @prefix@
 exec_prefix := @exec_prefix@
@@ -9,6 +10,9 @@ CFLAGS += -I@srcdir@/src
 CFLAGS += -Wno-format 
 CFLAGS += @configure_flags@ 
 CFLAGS += -O
+
+LD := $(CC)
+LDFLAGS := 
 
 # workaround for liberal use of uint8_t pointers where char pointers
 # are expected and vise-versa.
@@ -22,8 +26,11 @@ all:	$(NAME)
 install: $(NAME)
 	cp $(NAME) $(bindir)
 
+%.o: @srcdir@/src/%.c
+	$(CC) -c -o $@ $< $(CFLAGS)
+
 $(NAME): $(OBJECTS)
-	gcc ${CFLAGS} -o $(NAME) $(SRCFILES)
+	$(LD) -o $@ $^ $(LDFLAGS)
 
 .PHONY: clean 
 clean:

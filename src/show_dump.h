@@ -1,5 +1,4 @@
 /*
-
 Show_dump 0.1.1a
 
     Copyright 2004,2005,2006 Luigi Auriemma
@@ -33,7 +32,7 @@ Usage:
 
 
 void show_dump(unsigned char *data, unsigned int len, FILE *stream) {
-    const static char       hex[] = "0123456789abcdef";
+    static const char       hex[] = "0123456789abcdef";
     static unsigned char    buff[67];   /* HEX  CHAR\n */
     unsigned char           chr,
                             *bytes,

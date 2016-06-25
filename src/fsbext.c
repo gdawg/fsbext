@@ -1,5 +1,5 @@
 /*
-    Copyright 2005-2012 Luigi Auriemma
+    Copyright 2005-2016 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -49,6 +49,7 @@
     char *get_folder(char *title);
 #else
     #include <unistd.h>
+    #define stricmp     strcasecmp
     #define strnicmp    strncasecmp
     #define PATHSLASH   '/'
     #define make_dir(x) mkdir(x, 0755)
@@ -74,7 +75,7 @@ typedef int64_t     i64;
 
 
 
-#define VER         "0.3"
+#define VER         "0.3.5"
 #define HEXSIZE     176
 #define NULLNAME    "%08x.dat"
 
@@ -125,17 +126,18 @@ void fwi32(FILE *fd, int num);
 void fwb16(FILE *fd, int num);
 void fwb32(FILE *fd, int num);
 
-void fr_FSOUND_FSB_HEADER_FSB1(FILE *fd, FSOUND_FSB_HEADER_FSB1 *fh);
-void fr_FSOUND_FSB_HEADER_FSB2(FILE *fd, FSOUND_FSB_HEADER_FSB2 *fh);
-void fr_FSOUND_FSB_HEADER_FSB3(FILE *fd, FSOUND_FSB_HEADER_FSB3 *fh);
-void fr_FSOUND_FSB_HEADER_FSB4(FILE *fd, FSOUND_FSB_HEADER_FSB4 *fh);
-void fr_FSOUND_FSB_HEADER_FSB5(FILE *fd, FSOUND_FSB_HEADER_FSB5 *fh);
+int fr_FSOUND_FSB_HEADER_FSB1(FILE *fd, FSOUND_FSB_HEADER_FSB1 *fh);
+int fr_FSOUND_FSB_HEADER_FSB2(FILE *fd, FSOUND_FSB_HEADER_FSB2 *fh);
+int fr_FSOUND_FSB_HEADER_FSB3(FILE *fd, FSOUND_FSB_HEADER_FSB3 *fh);
+int fr_FSOUND_FSB_HEADER_FSB4(FILE *fd, FSOUND_FSB_HEADER_FSB4 *fh);
+int fr_FSOUND_FSB_HEADER_FSB5(FILE *fd, FSOUND_FSB_HEADER_FSB5 *fh);
 
-void fr_FSOUND_FSB_SAMPLE_HEADER_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_1 *fh);
-void fr_FSOUND_FSB_SAMPLE_HEADER_2(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_2 *fh);
-void fr_FSOUND_FSB_SAMPLE_HEADER_3_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_3_1 *fh);
-void fr_FSOUND_FSB_SAMPLE_HEADER_BASIC(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_BASIC *fh, int moresize);
+int fr_FSOUND_FSB_SAMPLE_HEADER_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_1 *fh);
+int fr_FSOUND_FSB_SAMPLE_HEADER_2(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_2 *fh);
+int fr_FSOUND_FSB_SAMPLE_HEADER_3_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_3_1 *fh);
+int fr_FSOUND_FSB_SAMPLE_HEADER_BASIC(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_BASIC *fh, int moresize);
 
+uint16_t mpg_get_frame_size (char *hdr);
 void pcmwav_header(FILE *fd, int freq, u16 chans, u16 bits, u32 rawlen);
 void xbox_ima_header(FILE *fd, int freq, u16 chans, u32 rawlen);
 void its_header(FILE *fd, u8 *fname, u16 chans, u16 bits, u32 rawlen);
@@ -187,7 +189,10 @@ int     addhead     = 1,    // from version 0.2.8a it has been enabled by defaul
         fsb_keyc    = 0,
         fsb_keysz   = 0,
         fsb_scan    = 0,
-        force_ima_x = 0;
+        force_ima_x = 0,
+        mode_fix    = 0,
+        mpeg_fix    = 1,
+        mpeg_split  = 0;
 u8      *rebbuff    = NULL,
         fsb_key[256] = "";
 
@@ -229,7 +234,8 @@ int main(int argc, char *argv[]) {
             list            = 0,
             rebuild         = 0,
             moresize_dumpsz = 0,
-            do_raw_crypt    = 0;
+            do_raw_crypt    = 0,
+            fh_size         = 0;
     u16     chans           = 1,
             bits            = 16,
             moresize        = 0;
@@ -249,7 +255,7 @@ int main(int argc, char *argv[]) {
     fputs("\n"
         "FSB files extractor " VER "\n"
         "by Luigi Auriemma\n"
-        "e-mail: aluigi@autistici.org\n"
+        "e-mail: me@aluigi.org\n"
         "web:    aluigi.org\n"
         "\n", stderr);
 
@@ -303,30 +309,47 @@ int main(int argc, char *argv[]) {
         printf("\n"
             "Usage: %s [options] <file.FSB>\n"
             "\n"
+            "Options:\n"
             "-d DIR   output folder where extracting the files\n"
             "-l       list files without extracting them\n"
-            "-s FILE  binary file containing the informations for rebuilding the FSB file\n"
-            "-r       rebuild the original file, in short when you use -s:\n"
-            "         if you do NOT use -r will be created the binary file with the info\n"
-            "         if you use -r will be read the binary file (-s) and will be created a\n"
-            "         new FSB file (so it becomes the output and not the input)\n"
-            "         Example:   fsbext -s files.dat    input.fsb\n"
-            "                    fsbext -s files.dat -r output.fsb\n"
+            "-A       assign the ima_adpcm tag (0x11) instead of the xbox adpcm one (0x69)\n"
+            "         to the output files that use an adpcm codec\n"
+            "-M       split the multichannel mp3s in multiple files containing the single\n"
+            "         channels, load them in a multitrack software to listen the original\n"
+            "         multichannel file. this option is suggested for maximum quality\n"
+            "\n"
+            "Rebuilding options:\n"
+            "-s FILE  binary file containing the information for rebuilding the FSB file,\n"
+            "         specify it during the extraction (will be created) and rebuilding\n"
+            "-r       rebuild the original file:\n"
+            "         Example:   fsbext -d myfolder -s files.dat    input.fsb\n"
+            "                    fsbext -d myfolder -s files.dat -r output.fsb\n"
             "         the tool will remove any header in the imported files automatically\n"
-            "-p PASS  if the file is protected by password the tool will use this one\n"
-            "-o OFF   offset where is located the FSB data, use -1 to scan the input file\n"
+            "\n"
+            "Debugging options:\n"
+            "-v       verbose output, debugging information\n"
+            "-p PASS  use this password if the file is protected\n"
+            "-o OFF   offset where is located the FSB data, use -o -1 to scan the input file\n"
             "-e P T   only encrypt/decrypt the file without doing other operations using\n"
             "         the password P and the algorithm type T (0 and 1 supported)\n"
             "-E T     raw decryption using an empty password and algorithm T (read above)\n"
             "-f FILE  dump the list of extracted/listed files in FILE\n"
-            "-A       assign the ima_adpcm tag (0x11) instead of the xbox adpcm one (0x69)\n"
-            "         to the output files that use an adpcm codec\n"
-            "-v       verbose output, debugging informations\n"
+            "-m       disable the mpeg modifications, by default the tool automatically\n"
+            "         removes the non-standard padding from mp3 files and dumps only the\n"
+            "         first channel of multichannel files, note that this is not a downmix\n"
+            "         but just the selection of the first stereo channel.\n"
+            "         use this option to disable them, but the mp3 will be not playable\n"
             "%s\n"
             "\n"
+            "NOTE: by default this tool dumps only the first one or two channels of\n"
+            "      multichannel mp3 files to make them playable on standard music players,\n"
+            "      use -M to avoid this behaviour!\n"
             "NOTE: use EVER an empty folder where placing the extracted files because this\n"
-            "      tool adds a sequential number if a file with same name already exists\n"
-            "      since filenames in FSB archives are truncated at 30 chars.\n"
+            "      tool adds a sequential number if a file with same name already exists,\n"
+            "      this is done because filenames in FSB archives are truncated at 30 chars.\n"
+            "NOTE: OGG files are dumped as-is and are not playable\n"
+            "NOTE: rebuilding was meant for old versions of FSB (<= 4), may work with mp3\n"
+            "      files (or with -M), it just put the raw files in the new archive\n"
             "\n", argv[0],
             addhead ?
                 "-R       raw output files (by default the tool adds headers and extensions)\n"
@@ -365,11 +388,21 @@ int main(int argc, char *argv[]) {
                 break;
             }
             case 'o': {
-                fsb_offset    = get_num(argv[++i]);
+                i++;
+                fsb_offset    = get_num(argv[i]);
+                if(!stricmp(argv[i], "scan") || !stricmp(argv[i], "-l" /* L yes*/)) fsb_offset = -1;
                 if(fsb_offset < 0) {
                     fsb_offset = 0;
                     fsb_scan = 1;
                 }
+                break;
+            }
+            case 'm': {
+                mpeg_fix = 0;
+                break;
+            }
+            case 'M': {
+                mpeg_split = 1;
                 break;
             }
             default: {
@@ -532,28 +565,28 @@ redo:
 
     num = 0;
     if(sign == '1') {
-        fr_FSOUND_FSB_HEADER_FSB1(fd, &fh1);
+        fh_size = fr_FSOUND_FSB_HEADER_FSB1(fd, &fh1);
         num       = fh1.numsamples;
-        nameoff   = sizeof(fh1);
-        fileoff   = sizeof(fh1) + (num * sizeof(fs1));
+        nameoff   = fh_size;
+        fileoff   = fh_size + (num * sizeof(fs1));
         datasize  = fh1.datasize;
         head_ver  = 1;
         head_mode = 0;
 
     } else if(sign == '2') {
-        fr_FSOUND_FSB_HEADER_FSB2(fd, &fh2);
+        fh_size = fr_FSOUND_FSB_HEADER_FSB2(fd, &fh2);
         num       = fh2.numsamples;
-        nameoff   = sizeof(fh2);
-        fileoff   = sizeof(fh2) + fh2.shdrsize;
+        nameoff   = fh_size;
+        fileoff   = fh_size + fh2.shdrsize;
         datasize  = fh2.datasize;
         head_ver  = 2;
         head_mode = 0;
 
     } else if(sign == '3') {
-        fr_FSOUND_FSB_HEADER_FSB3(fd, &fh3);
+        fh_size = fr_FSOUND_FSB_HEADER_FSB3(fd, &fh3);
         num       = fh3.numsamples;
-        nameoff   = sizeof(fh3);
-        fileoff   = sizeof(fh3) + fh3.shdrsize;
+        nameoff   = fh_size;
+        fileoff   = fh_size + fh3.shdrsize;
         datasize  = fh3.datasize;
         head_ver  = 3;
         head_mode = fh3.mode;
@@ -562,10 +595,10 @@ redo:
             head_mode);
 
     } else if(sign == '4') {
-        fr_FSOUND_FSB_HEADER_FSB4(fd, &fh4);
+        fh_size = fr_FSOUND_FSB_HEADER_FSB4(fd, &fh4);
         num       = fh4.numsamples;
-        nameoff   = sizeof(fh4);
-        fileoff   = sizeof(fh4) + fh4.shdrsize;
+        nameoff   = fh_size;
+        fileoff   = fh_size + fh4.shdrsize;
         datasize  = fh4.datasize;
         head_ver  = 4;
         head_mode = fh4.mode;
@@ -574,10 +607,10 @@ redo:
             head_mode);
 
     } else if(sign == '5') {
-        fr_FSOUND_FSB_HEADER_FSB5(fd, &fh5);
+        fh_size = fr_FSOUND_FSB_HEADER_FSB5(fd, &fh5);
         num       = fh5.numsamples;
-        nameoff   = sizeof(fh5) + fh5.shdrsize;
-        fileoff   = sizeof(fh5) + fh5.shdrsize + fh5.namesize;
+        nameoff   = fh_size + fh5.shdrsize;
+        fileoff   = fh_size + fh5.shdrsize + fh5.namesize;
         datasize  = fh5.datasize;
         head_ver  = 5;
         head_mode = 0;
@@ -604,9 +637,9 @@ redo:
     baseoff = fileoff;
     if(verbose) {
         printf(
-            "- base  offset  %08x\n"
-            "- names offset  %08x\n"
-            "- files offset  %08x\n",
+            "- base  offset   %08x\n"
+            "- names offset   %08x\n"
+            "- files offset   %08x\n",
             baseoff, nameoff, fileoff);
     }
 
@@ -618,6 +651,7 @@ redo:
         memset(name, 0, sizeof(name));  // I need to use it because filenames are truncated!
 
         if(head_ver == 1) {
+            mode_fix = fs1.mode;
             fr_FSOUND_FSB_SAMPLE_HEADER_1(fd, &fs1);
             sprintf(name, "%.*s", sizeof(fs1.name), fs1.name);
             samples  = fs1.lengthsamples;
@@ -659,6 +693,8 @@ redo:
             }
 
         } else if(head_ver == 5) {
+            FDREB_INIT
+
             moresize = 0;
             freq    = 44100;
             chans   = 1;
@@ -694,11 +730,28 @@ redo:
             offset   = fr32(fd);
             samples  = fr32(fd) >> 2;   // ???
 
-            type     = offset & 0xff;
-            offset >>= 8;
-            offset  *= 0x40;
+            #define GET_FSB5_OFFSET(X)  (((X) >> 7) * 0x20)
 
-            if(type & 0x20) chans = 2;
+            type    = offset & ((1 << 7) - 1);
+            offset  = GET_FSB5_OFFSET(offset);
+
+            chans = (type >> 5) + 1;
+            switch((type >> 1) & ((1 << 4) - 1)) {
+                case 0:  freq = 4000;   break;
+                case 1:  freq = 8000;   break;
+                case 2:  freq = 11000;  break;
+                case 3:  freq = 12000;  break;
+                case 4:  freq = 16000;  break;
+                case 5:  freq = 22050;  break;
+                case 6:  freq = 24000;  break;
+                case 7:  freq = 32000;  break;
+                case 8:  freq = 44100;  break;
+                case 9:  freq = 48000;  break;
+                case 10: freq = 96000;  break;
+                default: freq = 44100;  break;
+            }
+            //chans = (type >> 4) + 1;
+            //if((type >> 4) == 0x3) chans = 2;  // work-around
 
             while(type & 1) {
                 t32  = fr32(fd);
@@ -706,6 +759,7 @@ redo:
                 len  = (t32 & 0xffffff) >> 1;
                 t32 >>= 24;
                 t64 = myftell(fd);
+                if(verbose) printf("- type32 0x%x\n", t32);
                 switch(t32) {
                     case 0x2: chans = fr8(fd);      break;
                     case 0x4: freq  = fr32(fd);     break;
@@ -723,6 +777,8 @@ redo:
                         frch(fd, moresize_dump, moresize);
                         break;
                     }
+                    case 0xa: chans = ((len == 1) ? fr8(fd) : fr32(fd)) * 2;  break;  // seen only once
+                    case 0x10: /*nothing?*/         break;
                     default: break;
                 }
                 t64 += len;
@@ -730,18 +786,19 @@ redo:
             }
 
             t64 = myftell(fd);
-            if(myftell(fd) < nameoff) {
+            if(t64 < nameoff) {
                 size = fr32(fd);
                 if(!size) {
-                    myfseek(fd, 0, SEEK_END);
-                    size = myftell(fd);
+                    size = fh5.datasize + baseoff;
                 } else {
-                    size >>= 8;
-                    size *= 0x40;
-                    size += baseoff;
+                    size = GET_FSB5_OFFSET(size) + baseoff;
                 }
             } else {
-                myfseek(fd, 0, SEEK_END);
+                size = fh5.datasize + baseoff;
+            }
+            // avoid possible malformed values
+            myfseek(fd, 0, SEEK_END);
+            if((size < 0) || (size > myftell(fd))) {
                 size = myftell(fd);
             }
             myfseek(fd, t64, SEEK_SET);
@@ -757,6 +814,10 @@ redo:
             } else {
                 sprintf(name, NULLNAME, i);
             }
+
+            rebsize = 0;
+            add_to_reb_file(fd);
+            if(fdreb) fwch(fdreb, name, strlen(name) + 1);
 
         } else {
             printf("\nError: you must update this tool adding support for head version %d\n", head_ver);
@@ -797,21 +858,36 @@ redo:
         }
 
         current_offset = myftell(fd);
-        if(!list) {
+        if(verbose) printf("  %08x %-10d %d %d %d %d %d\n", fileoff, size, freq, chans, bits, moresize, samples);
+
             if(myfseek(fd, fileoff, SEEK_SET) < 0) std_err();
+        if(!list) {
             extract_file(fd, name, freq, chans, bits, size, moresize_dump, moresize, samples);
+        }
             fileoff += size;
             if(aligned) {
-                if(fileoff & 31) fileoff = (fileoff + 31) & (~31);
+                if(fileoff & 0x1f) fileoff = (fileoff + 0x1f) & (~0x1f);
             }
-        }
+
         myfseek(fd, current_offset, SEEK_SET);
+        if(verbose) printf("\n");
     }
 
     if(fsb_scan) {
         if(fileoff < datasize) fileoff = datasize;
         fsb_offset += fileoff;
         goto redo;
+    } else {
+        if(fd) {
+            fseek(fd, 0, SEEK_END);
+            t64 = myftell(fd);
+            if(fileoff < t64) {
+                printf("\n"
+                    "Tip: there is some unused space at the end of the archive: %u bytes\n"
+                    "Maybe try the scanner option -o -1 to check if there are other FSB archives\n",
+                    (int)(t64 - fileoff));
+            }
+        }
     }
 quit:
     if(fd)     fclose(fd);
@@ -860,12 +936,14 @@ int rebuild_fsb(FILE *fd) {
             val3;
     u32     i,
             j,
+            t,
             files,
             head_off,
             head_size,
             real_head_size          = 0,
             data_off,
             data_size,
+            base_off,
             lengthsamples           = 0,
             lengthcompressedbytes   = 0,
             *already_read;
@@ -900,12 +978,14 @@ int rebuild_fsb(FILE *fd) {
     fs31 = (FSOUND_FSB_SAMPLE_HEADER_3_1 *)rebbuff;
     fsb  = (FSOUND_FSB_SAMPLE_HEADER_BASIC *)rebbuff;
 
-    files  = *(u32 *)(rebbuff + 4);
     ver    = rebbuff[3];
-
-    if(ver >= '5') {
-        printf("\nError: use the FMOD programs to rebuild the files of FSB versions major than 4\n");
-        myexit(0);
+    switch(ver) {
+        case '1': files = fh1->numsamples;  break;
+        case '2': files = fh2->numsamples;  break;
+        case '3': files = fh3->numsamples;  break;
+        case '4': files = fh4->numsamples;  break;
+        case '5': files = fh5->numsamples;  break;
+        default:  files = 0;                break;
     }
 
 #define X0(x,y,z)   if(ver == x) {                                              \
@@ -955,12 +1035,38 @@ int rebuild_fsb(FILE *fd) {
         rebsize = fr32(fdreb);
         REBBUFFCHK
         frch(fdreb, rebbuff, rebsize);
-        frchs(fdreb, name, sizeof(name));
+        if(ver == '5') frchs(fdreb, name, sizeof(name));    // packed filename
+        frchs(fdreb, name, sizeof(name));   // real filename
         head_size += rebsize;
     }
     if(head_size < real_head_size) head_size = real_head_size;
 
-    data_off = head_off + head_size;
+    if(ver == '5') {
+        t = 0;
+        fseek(fd, head_size, SEEK_CUR);
+        fseek(fdreb, reboff, SEEK_SET);
+        for(i = 0; i < files; i++) {
+            rebsize = fr32(fdreb);
+            fseek(fdreb, rebsize, SEEK_CUR);
+            frchs(fdreb, name, sizeof(name));
+            fwi32(fd, (files * 4) + t);
+            t += strlen(name) + 1;
+            frchs(fdreb, name, sizeof(name));
+        }
+        fseek(fdreb, reboff, SEEK_SET);
+        for(i = 0; i < files; i++) {
+            rebsize = fr32(fdreb);
+            fseek(fdreb, rebsize, SEEK_CUR);
+            frchs(fdreb, name, sizeof(name));
+            fwch(fd, name, strlen(name) + 1);
+            frchs(fdreb, name, sizeof(name));
+        }
+        while(ftell(fd) & 31) fwch(fd, "\x00", 1);
+        data_off = ftell(fd);
+    } else {
+        data_off = head_off + head_size;
+    }
+    base_off = data_off;
 
     fseek(fdreb, reboff, SEEK_SET);
 
@@ -979,7 +1085,11 @@ int rebuild_fsb(FILE *fd) {
         else X1('2', fs2)
         else X1('3', fs31)
         else X1('4', fs31) // correct
-        else X1('5', fs31) // correct
+        else if(ver == '5') {
+            frchs(fdreb, name, sizeof(name));
+            lengthsamples = 0;
+            lengthcompressedbytes = 0;
+        }
 
         // avoid lots of boring problems with the truncated filenames
         frchs(fdreb, name, sizeof(name));
@@ -1032,16 +1142,20 @@ int rebuild_fsb(FILE *fd) {
         end and should not give problems.
         */
         lengthcompressedbytes += padding;
-        data_off  += lengthcompressedbytes;
-        data_size += lengthcompressedbytes;
 
         if(name[0]) {   // this is the correct way, NULL files will be left as they are
                  X2('1', fs1)
             else X2('2', fs2)
             else X2('3', fs31)
             else X2('4', fs31) // correct
-            else X2('5', fs31) // correct
+            else if(ver == '5') {
+                *(u32 *)rebbuff = (*(u32 *)rebbuff & ((1 << 7) - 1)) | (((data_off - base_off) / 0x20) << 7);
+                // ignored at the moment: *(u32 *)(rebbuff + 4)
+            }
         }
+
+        data_off  += lengthcompressedbytes;
+        data_size += lengthcompressedbytes;
 
         fseek(fd, head_off, SEEK_SET);
         fwch(fd, rebbuff, rebsize);
@@ -1172,7 +1286,8 @@ u8 fr8(FILE *fd) {
 
     t = myfgetc(fd);
     if(t < 0) read_err();
-    return(t);
+    if(verbose) printf("  fr8   %08x %02x\n", (u32)myftell(fd) - 1, t);
+    return t;
 }
 
 
@@ -1180,11 +1295,14 @@ u8 fr8(FILE *fd) {
 u16 fri16(FILE *fd) {
     int     t1,
             t2;
+    u16     ret;
 
     t1 = myfgetc(fd);
     t2 = myfgetc(fd);
     if((t1 < 0) || (t2 < 0)) read_err();
-    return(t1 | (t2 << 8));
+    ret = t1 | (t2 << 8);
+    if(verbose) printf("  fri16 %08x %04x\n", (u32)myftell(fd) - 2, ret);
+    return ret;
 }
 
 
@@ -1192,11 +1310,14 @@ u16 fri16(FILE *fd) {
 u16 frb16(FILE *fd) {
     int     t1,
             t2;
+    u16     ret;
 
     t1 = myfgetc(fd);
     t2 = myfgetc(fd);
     if((t1 < 0) || (t2 < 0)) read_err();
-    return(t2 | (t1 << 8));
+    ret = t2 | (t1 << 8);
+    if(verbose) printf("  frb16 %08x %04x\n", (u32)myftell(fd) - 2, ret);
+    return ret;
 }
 
 
@@ -1206,13 +1327,16 @@ u32 fri32(FILE *fd) {
             t2,
             t3,
             t4;
+    u32     ret;
 
     t1 = myfgetc(fd);
     t2 = myfgetc(fd);
     t3 = myfgetc(fd);
     t4 = myfgetc(fd);
     if((t1 < 0) || (t2 < 0) || (t3 < 0) || (t4 < 0)) read_err();
-    return(t1 | (t2 << 8) | (t3 << 16) | (t4 << 24));
+    ret = t1 | (t2 << 8) | (t3 << 16) | (t4 << 24);
+    if(verbose) printf("  fri32 %08x %08x\n", (u32)myftell(fd) - 4, ret);
+    return ret;
 }
 
 
@@ -1222,13 +1346,16 @@ u32 frb32(FILE *fd) {
             t2,
             t3,
             t4;
+    u32     ret;
 
     t1 = myfgetc(fd);
     t2 = myfgetc(fd);
     t3 = myfgetc(fd);
     t4 = myfgetc(fd);
     if((t1 < 0) || (t2 < 0) || (t3 < 0) || (t4 < 0)) read_err();
-    return(t4 | (t3 << 8) | (t2 << 16) | (t1 << 24));
+    ret = t4 | (t3 << 8) | (t2 << 16) | (t1 << 24);
+    if(verbose) printf("  frb32 %08x %08x\n", (u32)myftell(fd) - 4, ret);
+    return ret;
 }
 
 
@@ -1302,13 +1429,16 @@ int check_sign_endian(FILE *fd) {
 }
 
 
-void fr_FSOUND_FSB_HEADER_FSB1(FILE *fd, FSOUND_FSB_HEADER_FSB1 *fh) {
+int fr_FSOUND_FSB_HEADER_FSB1(FILE *fd, FSOUND_FSB_HEADER_FSB1 *fh) {
     FDREB_INIT
+    int ret;
+    i64 old_off = myftell(fd);
 
                      frch(fd, fh->id, 4);
     fh->numsamples = fr32(fd);
     fh->datasize   = fr32(fd);
     fh->dunno_null = fr32(fd);
+    ret = myftell(fd) - old_off;
 
     rebsize = 0;
     add_to_reb_file(fd);
@@ -1320,23 +1450,28 @@ void fr_FSOUND_FSB_HEADER_FSB1(FILE *fd, FSOUND_FSB_HEADER_FSB1 *fh) {
             "  fh->numsamples %08x\n"
             "  fh->datasize   %08x\n"
             "  fh->dunno_null %08x\n",
-            (u32)myftell(fd) - sizeof(*fh),
+            ret,
             fh->id,
             fh->numsamples,
             fh->datasize,
             fh->dunno_null);
     }
+
+    return ret;
 }
 
 
 
-void fr_FSOUND_FSB_HEADER_FSB2(FILE *fd, FSOUND_FSB_HEADER_FSB2 *fh) {
+int fr_FSOUND_FSB_HEADER_FSB2(FILE *fd, FSOUND_FSB_HEADER_FSB2 *fh) {
     FDREB_INIT
+    int ret;
+    i64 old_off = myftell(fd);
 
                      frch(fd, fh->id, 4);
     fh->numsamples = fr32(fd);
     fh->shdrsize   = fr32(fd);
     fh->datasize   = fr32(fd);
+    ret = myftell(fd) - old_off;
 
     rebsize = 0;
     add_to_reb_file(fd);
@@ -1348,18 +1483,22 @@ void fr_FSOUND_FSB_HEADER_FSB2(FILE *fd, FSOUND_FSB_HEADER_FSB2 *fh) {
             "  fh->numsamples %08x\n"
             "  fh->shdrsize   %08x\n"
             "  fh->datasize   %08x\n",
-            (u32)myftell(fd) - sizeof(*fh),
+            ret,
             fh->id,
             fh->numsamples,
             fh->shdrsize,
             fh->datasize);
     }
+
+    return ret;
 }
 
 
 
-void fr_FSOUND_FSB_HEADER_FSB3(FILE *fd, FSOUND_FSB_HEADER_FSB3 *fh) {
+int fr_FSOUND_FSB_HEADER_FSB3(FILE *fd, FSOUND_FSB_HEADER_FSB3 *fh) {
     FDREB_INIT
+    int ret;
+    i64 old_off = myftell(fd);
 
                      frch(fd, fh->id, 4);
     fh->numsamples = fr32(fd);
@@ -1367,6 +1506,7 @@ void fr_FSOUND_FSB_HEADER_FSB3(FILE *fd, FSOUND_FSB_HEADER_FSB3 *fh) {
     fh->datasize   = fr32(fd);
     fh->version    = fr32(fd);
     fh->mode       = fr32(fd);
+    ret = myftell(fd) - old_off;
 
     rebsize = 0;
     add_to_reb_file(fd);
@@ -1380,7 +1520,7 @@ void fr_FSOUND_FSB_HEADER_FSB3(FILE *fd, FSOUND_FSB_HEADER_FSB3 *fh) {
             "  fh->datasize   %08x\n"
             "  fh->version    %08x\n"
             "  fh->mode       %08x\n",
-            (u32)myftell(fd) - sizeof(*fh),
+            ret,
             fh->id,
             fh->numsamples,
             fh->shdrsize,
@@ -1388,12 +1528,16 @@ void fr_FSOUND_FSB_HEADER_FSB3(FILE *fd, FSOUND_FSB_HEADER_FSB3 *fh) {
             fh->version,
             fh->mode);
     }
+
+    return ret;
 }
 
 
 
-void fr_FSOUND_FSB_HEADER_FSB4(FILE *fd, FSOUND_FSB_HEADER_FSB4 *fh) {
+int fr_FSOUND_FSB_HEADER_FSB4(FILE *fd, FSOUND_FSB_HEADER_FSB4 *fh) {
     FDREB_INIT
+    int ret;
+    i64 old_off = myftell(fd);
 
                      frch(fd, fh->id, 4);
     fh->numsamples = fr32(fd);
@@ -1403,6 +1547,7 @@ void fr_FSOUND_FSB_HEADER_FSB4(FILE *fd, FSOUND_FSB_HEADER_FSB4 *fh) {
     fh->mode       = fr32(fd);
                      frch(fd, fh->zero, sizeof(fh->zero));
                      frch(fd, fh->hash, sizeof(fh->hash));
+    ret = myftell(fd) - old_off;
 
     rebsize = 0;
     add_to_reb_file(fd);
@@ -1416,7 +1561,7 @@ void fr_FSOUND_FSB_HEADER_FSB4(FILE *fd, FSOUND_FSB_HEADER_FSB4 *fh) {
             "  fh->datasize   %08x\n"
             "  fh->version    %08x\n"
             "  fh->mode       %08x\n",
-            (u32)myftell(fd) - sizeof(*fh),
+            ret,
             fh->id,
             fh->numsamples,
             fh->shdrsize,
@@ -1424,12 +1569,16 @@ void fr_FSOUND_FSB_HEADER_FSB4(FILE *fd, FSOUND_FSB_HEADER_FSB4 *fh) {
             fh->version,
             fh->mode);
     }
+
+    return ret;
 }
 
 
 
-void fr_FSOUND_FSB_HEADER_FSB5(FILE *fd, FSOUND_FSB_HEADER_FSB5 *fh) {
+int fr_FSOUND_FSB_HEADER_FSB5(FILE *fd, FSOUND_FSB_HEADER_FSB5 *fh) {
     FDREB_INIT
+    int ret;
+    i64 old_off = myftell(fd);
 
                      frch(fd, fh->id, 4);
     fh->version    = fr32(fd);
@@ -1438,9 +1587,11 @@ void fr_FSOUND_FSB_HEADER_FSB5(FILE *fd, FSOUND_FSB_HEADER_FSB5 *fh) {
     fh->namesize   = fr32(fd);
     fh->datasize   = fr32(fd);
     fh->mode       = fr32(fd);
+    if(!fh->version) fr32(fd);
                      frch(fd, fh->zero, sizeof(fh->zero));
                      frch(fd, fh->hash, sizeof(fh->hash));
                      frch(fd, fh->dummy, sizeof(fh->dummy));
+    ret = myftell(fd) - old_off;
 
     rebsize = 0;
     add_to_reb_file(fd);
@@ -1455,7 +1606,7 @@ void fr_FSOUND_FSB_HEADER_FSB5(FILE *fd, FSOUND_FSB_HEADER_FSB5 *fh) {
             "  fh->namesize   %08x\n"
             "  fh->datasize   %08x\n"
             "  fh->mode       %08x\n",
-            (u32)myftell(fd) - sizeof(*fh),
+            ret,
             fh->id,
             fh->version,
             fh->numsamples,
@@ -1464,12 +1615,16 @@ void fr_FSOUND_FSB_HEADER_FSB5(FILE *fd, FSOUND_FSB_HEADER_FSB5 *fh) {
             fh->datasize,
             fh->mode);
     }
+
+    return ret;
 }
 
 
 
-void fr_FSOUND_FSB_SAMPLE_HEADER_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_1 *fh) {
+int fr_FSOUND_FSB_SAMPLE_HEADER_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_1 *fh) {
     FDREB_INIT
+    int ret;
+    i64 old_off = myftell(fd);
 
                                 frch(fd, fh->name, sizeof(fh->name));
     fh->lengthsamples         = fr32(fd);
@@ -1482,6 +1637,7 @@ void fr_FSOUND_FSB_SAMPLE_HEADER_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_1 *fh) {
     fh->mode                  = fr32(fd);
     fh->loopstart             = fr32(fd);
     fh->loopend               = fr32(fd);
+    ret = myftell(fd) - old_off;
 
     rebsize = 0;
     add_to_reb_file(fd);
@@ -1500,7 +1656,7 @@ void fr_FSOUND_FSB_SAMPLE_HEADER_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_1 *fh) {
             "  fh->mode                  %08x\n"
             "  fh->loopstart             %08x\n"
             "  fh->loopend               %08x\n",
-            (u32)myftell(fd) - sizeof(*fh),
+            ret,
             sizeof(fh->name), fh->name,
             fh->lengthsamples,
             fh->lengthcompressedbytes,
@@ -1513,12 +1669,16 @@ void fr_FSOUND_FSB_SAMPLE_HEADER_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_1 *fh) {
             fh->loopstart,
             fh->loopend);
     }
+
+    return ret;
 }
 
 
 
-void fr_FSOUND_FSB_SAMPLE_HEADER_2(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_2 *fh) {
+int fr_FSOUND_FSB_SAMPLE_HEADER_2(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_2 *fh) {
     FDREB_INIT
+    int ret;
+    i64 old_off = myftell(fd);
 
     fh->size                  = fr16(fd);
                                 frch(fd, fh->name, sizeof(fh->name));
@@ -1532,6 +1692,7 @@ void fr_FSOUND_FSB_SAMPLE_HEADER_2(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_2 *fh) {
     fh->defpan                = fr16(fd);
     fh->defpri                = fr16(fd);
     fh->numchannels           = fr16(fd);
+    ret = myftell(fd) - old_off;
 
     rebsize = fh->size;
     add_to_reb_file(fd);
@@ -1551,7 +1712,7 @@ void fr_FSOUND_FSB_SAMPLE_HEADER_2(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_2 *fh) {
             "  fh->defpan                %04x\n"
             "  fh->defpri                %04x\n"
             "  fh->numchannels           %04x\n",
-            (u32)myftell(fd) - sizeof(*fh),
+            ret,
             fh->size,
             sizeof(fh->name), fh->name,
             fh->lengthsamples,
@@ -1565,12 +1726,16 @@ void fr_FSOUND_FSB_SAMPLE_HEADER_2(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_2 *fh) {
             fh->defpri,
             fh->numchannels);
     }
+
+    return ret;
 }
 
 
 
-void fr_FSOUND_FSB_SAMPLE_HEADER_3_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_3_1 *fh) {
+int fr_FSOUND_FSB_SAMPLE_HEADER_3_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_3_1 *fh) {
     FDREB_INIT
+    int ret;
+    i64 old_off = myftell(fd);
 
     fh->size                  = fr16(fd);
                                 frch(fd, fh->name, sizeof(fh->name));
@@ -1589,6 +1754,7 @@ void fr_FSOUND_FSB_SAMPLE_HEADER_3_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_3_1 *fh)
     fh->varfreq               = fr32(fd);
     fh->varvol                = fr16(fd);
     fh->varpan                = fr16(fd);
+    ret = myftell(fd) - old_off;
 
     rebsize = fh->size;
     add_to_reb_file(fd);
@@ -1613,7 +1779,7 @@ void fr_FSOUND_FSB_SAMPLE_HEADER_3_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_3_1 *fh)
             "  fh->varfreq               %08x\n"
             "  fh->varvol                %04x\n"
             "  fh->varpan                %04x\n",
-            (u32)myftell(fd) - sizeof(*fh),
+            ret,
             fh->size,
             sizeof(fh->name), fh->name,
             fh->lengthsamples,
@@ -1632,15 +1798,20 @@ void fr_FSOUND_FSB_SAMPLE_HEADER_3_1(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_3_1 *fh)
             fh->varvol,
             fh->varpan);
     }
+
+    return ret;
 }
 
 
 
-void fr_FSOUND_FSB_SAMPLE_HEADER_BASIC(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_BASIC *fh, int moresize) {
+int fr_FSOUND_FSB_SAMPLE_HEADER_BASIC(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_BASIC *fh, int moresize) {
     FDREB_INIT
+    int ret;
+    i64 old_off = myftell(fd);
 
     fh->lengthsamples         = fr32(fd);
     fh->lengthcompressedbytes = fr32(fd);
+    ret = myftell(fd) - old_off;
 
     rebsize = sizeof(FSOUND_FSB_SAMPLE_HEADER_BASIC) + moresize;
     add_to_reb_file(fd);
@@ -1650,10 +1821,105 @@ void fr_FSOUND_FSB_SAMPLE_HEADER_BASIC(FILE *fd, FSOUND_FSB_SAMPLE_HEADER_BASIC 
             "- %08x fr_FSOUND_FSB_SAMPLE_HEADER_BASIC:\n"
             "  fh->lengthsamples         %08x\n"
             "  fh->lengthcompressedbytes %08x\n",
-            (u32)myftell(fd) - sizeof(*fh),
+            ret,
             fh->lengthsamples,
             fh->lengthcompressedbytes);
     }
+
+    return ret;
+}
+
+
+
+// from http://www.hydrogenaudio.org/forums/index.php?showtopic=85125
+uint16_t mpg_get_frame_size (char *hdr) {
+
+    // MPEG versions - use [version]
+    //const uint8_t mpeg_versions[4] = { 25, 0, 2, 1 };
+
+    // Layers - use [layer]
+    //const uint8_t mpeg_layers[4] = { 0, 3, 2, 1 };
+
+    // Bitrates - use [version][layer][bitrate]
+    const uint16_t mpeg_bitrates[4][4][16] = {
+      { // Version 2.5
+        { 0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 0 }, // Reserved
+        { 0,   8,  16,  24,  32,  40,  48,  56,  64,  80,  96, 112, 128, 144, 160, 0 }, // Layer 3
+        { 0,   8,  16,  24,  32,  40,  48,  56,  64,  80,  96, 112, 128, 144, 160, 0 }, // Layer 2
+        { 0,  32,  48,  56,  64,  80,  96, 112, 128, 144, 160, 176, 192, 224, 256, 0 }  // Layer 1
+      },
+      { // Reserved
+        { 0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 0 }, // Invalid
+        { 0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 0 }, // Invalid
+        { 0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 0 }, // Invalid
+        { 0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 0 }  // Invalid
+      },
+      { // Version 2
+        { 0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 0 }, // Reserved
+        { 0,   8,  16,  24,  32,  40,  48,  56,  64,  80,  96, 112, 128, 144, 160, 0 }, // Layer 3
+        { 0,   8,  16,  24,  32,  40,  48,  56,  64,  80,  96, 112, 128, 144, 160, 0 }, // Layer 2
+        { 0,  32,  48,  56,  64,  80,  96, 112, 128, 144, 160, 176, 192, 224, 256, 0 }  // Layer 1
+      },
+      { // Version 1
+        { 0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 0 }, // Reserved
+        { 0,  32,  40,  48,  56,  64,  80,  96, 112, 128, 160, 192, 224, 256, 320, 0 }, // Layer 3
+        { 0,  32,  48,  56,  64,  80,  96, 112, 128, 160, 192, 224, 256, 320, 384, 0 }, // Layer 2
+        { 0,  32,  64,  96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0 }, // Layer 1
+      }
+    };
+
+    // Sample rates - use [version][srate]
+    const uint16_t mpeg_srates[4][4] = {
+        { 11025, 12000,  8000, 0 }, // MPEG 2.5
+        {     0,     0,     0, 0 }, // Reserved
+        { 22050, 24000, 16000, 0 }, // MPEG 2
+        { 44100, 48000, 32000, 0 }  // MPEG 1
+    };
+
+    // Samples per frame - use [version][layer]
+    const uint16_t mpeg_frame_samples[4][4] = {
+    //    Rsvd     3     2     1  < Layer  v Version
+        {    0,  576, 1152,  384 }, //       2.5
+        {    0,    0,    0,    0 }, //       Reserved
+        {    0,  576, 1152,  384 }, //       2
+        {    0, 1152, 1152,  384 }  //       1
+    };
+
+    // Slot size (MPEG unit of measurement) - use [layer]
+    const uint8_t mpeg_slot_size[4] = { 0, 1, 1, 4 }; // Rsvd, 3, 2, 1
+
+    // Quick validity check
+    if ( ( ((unsigned char)hdr[0] & 0xFF) != 0xFF)
+      || ( ((unsigned char)hdr[1] & 0xE0) != 0xE0)   // 3 sync bits
+      || ( ((unsigned char)hdr[1] & 0x18) == 0x08)   // Version rsvd
+      || ( ((unsigned char)hdr[1] & 0x06) == 0x00)   // Layer rsvd
+      || ( ((unsigned char)hdr[2] & 0xF0) == 0xF0)   // Bitrate rsvd
+    ) return 0;
+    
+    // Data to be extracted from the header
+    uint8_t   ver = (hdr[1] & 0x18) >> 3;   // Version index
+    uint8_t   lyr = (hdr[1] & 0x06) >> 1;   // Layer index
+    uint8_t   pad = (hdr[2] & 0x02) >> 1;   // Padding? 0/1
+    uint8_t   brx = (hdr[2] & 0xf0) >> 4;   // Bitrate index
+    uint8_t   srx = (hdr[2] & 0x0c) >> 2;   // SampRate index
+    
+    // added for FSBext to skip invalid frames
+    //printf("MP3debug %d %d %d %d %d\n", ver, lyr, pad, brx, srx);
+    //if((ver != 3) || (lyr != 1)) return 0;
+
+    // Lookup real values of these fields
+    uint32_t  bitrate   = mpeg_bitrates[ver][lyr][brx] * 1000;
+    uint32_t  samprate  = mpeg_srates[ver][srx];
+    uint16_t  samples   = mpeg_frame_samples[ver][lyr];
+    uint8_t   slot_size = mpeg_slot_size[lyr];
+    
+    // In-between calculations
+    float     bps       = (float)samples / 8.0;
+    float     fsize     = ( (bps * (float)bitrate) / (float)samprate )
+                        + ( (pad) ? slot_size : 0 );
+    
+    // Frame sizes are truncated integers
+    return (uint16_t)fsize;
 }
 
 
@@ -1865,6 +2131,9 @@ void vag_header(FILE *fd, u8 *fname, int freq, u32 rawlen) {
 
 char *show_mode(u32 mode, int *xcodec, u16 *xchans, u16 *xbits) {
     static char m[300];
+
+    // just a lame and quick way to know the current mode value globally
+    mode_fix = mode;
 
     m[0] = 0;
     if(mode & FSOUND_LOOP_OFF)      strcat(m, "noloop,");
@@ -2185,21 +2454,103 @@ u32 putfile(FILE *fd, /*int idx,*/ u8 *fname) {
 
 
 
-int dump_file(FILE *fd, FILE *fdo, int len, int bits) {
+int dump_file(FILE *fd, FILE *fdo, int len, int bits, int codec, int chans, u8 *original_fname, int *remove_file) {
     int     t,
             n,
-            j;
-    u8      buff[1024];
+            j,
+            frame,
+            stereo,
+            frame_chans;
+    u8      buff[4096], // more than 2889
+            hdr[3];
+    FILE    *fdoc[chans];
+
+    if(remove_file) *remove_file = 0;
+
+    stereo = chans / 2;
+    if(!stereo) stereo = 1;
+
+    frame_chans = (chans & 1) ? chans : (chans / 2);
 
     if(!pcm_endian || (bits < 16) || (bits > 32)) { // normal fast copy
-        for(t = sizeof(buff); len; len -= t) {
-            if(t > len) t = len;
-            n = myfr(fd, buff, t);
-            fwch(fdo, buff, n);
-            if(n != t) goto quit;
+
+        if((codec == FMOD_SOUND_FORMAT_MPEG) && mpeg_fix) {
+            if(mpeg_split) {
+                for(t = 0; t < frame_chans; t++) {
+                    snprintf(buff, sizeof(buff), "%s_channels%c%d.mp3", original_fname, PATHSLASH, t);
+                    create_dir(buff);
+                    fdoc[t] = fopen(buff, "wb");
+                    if(!fdoc[t]) std_err();
+                }
+                if(remove_file) *remove_file = 1;
+            }
+
+            for(frame = 0; len > 0; frame++) {
+                if(myfr(fd, hdr, 3) != 3) break;    //goto quit;
+                len -= 3;
+                t = 0;
+                while(len > 0) {
+                    t = mpg_get_frame_size(hdr);
+                    if(t) break;
+                    n = myfgetc(fd);
+                    if(n < 0) {
+                        //read_err();
+                        len = -1;
+                        break;
+                    }
+                    len--;
+                    hdr[0] = hdr[1];
+                    hdr[1] = hdr[2];
+                    hdr[2] = n;
+                }
+                if(len < 0) break;
+                if(t > sizeof(buff)) {
+                    printf("\nError: invalid mpeg frame size %d\n", t);
+                    exit(1);
+                }
+
+                t -= 3;
+                if((len - t) < 0) break;
+
+                #define MP3_CHANS_DOWNMIX   mpeg_split || (chans <= 2) || !(frame % frame_chans)
+
+                if(mpeg_split) fdo = fdoc[frame % frame_chans];
+                if(MP3_CHANS_DOWNMIX) {
+                    fwch(fdo, hdr, 3);
+                }
+
+                if(t > 0) {
+                    n = myfr(fd, buff, t);
+                    len -= n;
+                    if(mpeg_split) fdo = fdoc[frame % frame_chans];
+                    if(MP3_CHANS_DOWNMIX) {
+                        fwch(fdo, buff, n);
+                    }
+                    if(n != t) break; //goto quit;
+                }
+
+                if(mode_fix & FSOUND_MULTICHANNEL) {
+                    for(n = myftell(fd); n & 0xf; n++) {
+                        myfgetc(fd);
+                    }
+                }
+            }
+
+            if(mpeg_split) {
+                for(t = 0; t < frame_chans; t++) {
+                    fclose(fdoc[t]);
+                }
+            }
+        } else {
+            for(t = sizeof(buff); len > 0; len -= t) {
+                if(t > len) t = len;
+                n = myfr(fd, buff, t);
+                fwch(fdo, buff, n);
+                if(n != t) goto quit;
+            }
         }
     } else {    // automatically converts endianess
-        for(t = bits / 8; len; len -= t) {
+        for(t = bits / 8; len > 0; len -= t) {
             if(t > len) t = len;
             n = myfr(fd, buff, t);
             for(j = t - 1; j >= 0; j--) {
@@ -2218,7 +2569,8 @@ quit:
 
 void extract_file(FILE *fd, u8 *fname, int freq, u16 chans, u16 bits, u32 len, u8 *moresize_dump, int moresize, int samples) {
     FILE    *fdo;
-    int     pcm = 0;
+    int     pcm = 0,
+            remove_file;
 
     create_dir(fname);  // mainly for security
 
@@ -2266,8 +2618,9 @@ void extract_file(FILE *fd, u8 *fname, int freq, u16 chans, u16 bits, u32 len, u
         }
     }
 
-    dump_file(fd, fdo, len, pcm);
+    dump_file(fd, fdo, len, pcm, codec, chans, fname, &remove_file);
     fclose(fdo);
+    if(remove_file) unlink(fname);
 }
 
 

@@ -10,6 +10,13 @@ CFLAGS += -Wno-format
 CFLAGS += @configure_flags@ 
 CFLAGS += -O
 
+# workaround for liberal use of uint8_t pointers where char pointers
+# are expected and vise-versa.
+#
+# It's hoped that -funsigned-char will correct for any mismatch and
+# -Wpointer-sign will quelch the ~= 200 warnings but it erks me a little.
+CFLAGS += -funsigned-char -Wno-pointer-sign
+
 all:	$(NAME)
 
 install: $(NAME)

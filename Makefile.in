@@ -1,19 +1,23 @@
-NAME=fsbext
-SRCFILES=src/fsbext.c
+NAME := fsbext
+SRCFILES := @srcdir@/src/fsbext.c
 
-prefix=@prefix@
-exec_prefix=@exec_prefix@
-bindir=@bindir@
+prefix := @prefix@
+exec_prefix := @exec_prefix@
+bindir := @bindir@
 
-CFLAGS=-Isrc -Wno-format @configure_flags@ -O
+CFLAGS += -I@srcdir@/src 
+CFLAGS += -Wno-format 
+CFLAGS += @configure_flags@ 
+CFLAGS += -O
 
 all:	$(NAME)
-clean:
-	rm -f $(NAME)
-	rm -f $(OBJECTS)
 
 install: $(NAME)
 	cp $(NAME) $(bindir)
 
 $(NAME): $(OBJECTS)
 	gcc ${CFLAGS} -o $(NAME) $(SRCFILES)
+
+.PHONY: clean 
+clean:
+	rm -f $(NAME) $(OBJECTS)
